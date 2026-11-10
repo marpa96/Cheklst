@@ -200,6 +200,8 @@ export function validateState(s) {
   for(const [id,r] of Object.entries(s.runs)) {
     if(!ids.has(id) || typeof r.markdown!=='string' || !record(r.states) || Object.values(r.states).some(v=>!['done','pending'].includes(v))) throw new Error('Invalid saved progress.');
     if(r.calc!==undefined&&!record(r.calc))throw new Error('Invalid saved calculation values.');
+    if(r.counts!==undefined&&(!record(r.counts)||Object.values(r.counts).some(n=>!Number.isInteger(n)||n<0)))throw new Error('Invalid saved counters.');
+    if(r.timers!==undefined&&(!record(r.timers)||Object.values(r.timers).some(t=>!record(t)||!Number.isFinite(t.seconds))))throw new Error('Invalid saved timers.');
     const lines=new Set(tasks(r).map(b=>String(b.line)));
     if(Object.keys(r.states).some(line=>!lines.has(line)))throw new Error('Saved progress references missing items.');
   }
