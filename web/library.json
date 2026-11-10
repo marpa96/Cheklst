@@ -1,0 +1,56 @@
+{
+  "format": "cheklst-library-v1",
+  "categories": [
+    "Car",
+    "Hiking",
+    "Home",
+    "Travel"
+  ],
+  "checklists": [
+    {
+      "id": "lib-b878488f3e2d3442",
+      "path": "Car/Road trip prep.md",
+      "title": "Road trip prep",
+      "category": "Car",
+      "sequence": null,
+      "markdown": "# Road trip prep\n\n## Car check\n- [ ] Tire pressure (including spare)\n- [ ] Oil level\n- [ ] Washer fluid\n- [ ] Lights and turn signals\n- [ ] Wipers\n\n## Fuel budget\n\n```calc\ntitle Trip fuel cost\ninput distance = 300 | Distance (mi)\ninput mpg = 30 | Fuel economy (mpg)\ninput price = 3.50 | Gas price ($/gal)\nlet gallons = distance / mpg\nshow stops = ceil(gallons / 12) | Fill-ups (12 gal tank)\nshow cost = round(gallons * price, 2) | Fuel cost ($)\n```\n\n- [ ] Budget ${{cost}} for fuel\n\n## In the car\n- [ ] Phone mount and charger\n- [ ] Offline maps downloaded\n- [ ] Water and snacks\n- [ ] Sunglasses\n- [ ] Registration and insurance card\n",
+      "hash": "bf1d226d227447e0"
+    },
+    {
+      "id": "lib-0ce49bfc40a3ffea",
+      "path": "Hiking/Day hike.md",
+      "title": "Day hike",
+      "category": "Hiking",
+      "sequence": null,
+      "markdown": "# Day hike\n\n> [!IMPORTANT]\n> Tell someone your route and when you expect to be back.\n\n## Water & food\n\n```calc\ntitle Water to carry\ninput hours = 4 | Hours on the trail\ninput temp = 70 | Temperature (°F)\nlet rate = if(temp >= 85, 1, 0.5)\nshow liters = round(hours * rate, 1) | Liters of water\n```\n\n- [ ] Water: {{liters}} L\n- [ ] Snacks / lunch\n- [ ] Electrolytes\n\n## The ten essentials\n- [ ] Navigation (map, offline map on phone)\n- [ ] Headlamp\n- [ ] Sun protection\n- [ ] First aid kit\n- [ ] Knife / multitool\n- [ ] Fire starter\n- [ ] Emergency shelter\n- [ ] Extra food\n- [ ] Extra water\n- [ ] Extra clothes\n\n## At the trailhead\n- [ ] Check the weather one more time\n- [ ] Note the time you start\n",
+      "hash": "a98057a94b3efc38"
+    },
+    {
+      "id": "lib-f9833534f3571c7a",
+      "path": "Home/Monthly home check.md",
+      "title": "Monthly home check",
+      "category": "Home",
+      "sequence": null,
+      "markdown": "# Monthly home check\n\n- [ ] Test smoke and CO detectors\n- [ ] Check HVAC filter (replace every 1–3 months)\n- [ ] Clean the dishwasher filter\n- [ ] Run water in unused sinks and showers\n- [ ] Check under sinks for leaks\n- [ ] Clean the range hood filter\n",
+      "hash": "25123b8ad7523854"
+    },
+    {
+      "id": "lib-5f8377cb40858da9",
+      "path": "Travel/1. Packing list.md",
+      "title": "Packing list",
+      "category": "Travel",
+      "sequence": 1,
+      "markdown": "# Packing list\n\n## Documents\n- [ ] ID / passport\n- [ ] Tickets and reservations (saved offline)\n- [ ] Credit card + some cash\n\n## Clothes\n- [ ] Shirts — one per day, plus one\n- [ ] Pants / shorts\n- [ ] Underwear and socks\n- [ ] Sleepwear\n- [ ] Jacket or layer for the weather\n\n## Toiletries\n- [ ] Toothbrush and toothpaste\n- [ ] Deodorant\n- [ ] Medications\n- [ ] Sunscreen\n\n## Electronics\n- [ ] Phone charger\n- [ ] Battery pack\n- [ ] Headphones\n\n> [!TIP]\n> Lay everything out on the bed before it goes in the bag.\n",
+      "hash": "9f763b53b6336949"
+    },
+    {
+      "id": "lib-c8fca2f535a2dd1d",
+      "path": "Travel/2. Before leaving home.md",
+      "title": "Before leaving home",
+      "category": "Travel",
+      "sequence": 2,
+      "markdown": "# Before leaving home\n\n- [ ] Take out the trash\n- [ ] Empty or clear the fridge of anything that will spoil\n- [ ] Turn down the thermostat\n- [ ] Unplug small appliances\n- [ ] Water plants / arrange plant care\n- [ ] Lock windows\n- [ ] Lock the door\n",
+      "hash": "fc197425ce3f5c93"
+    }
+  ]
+}

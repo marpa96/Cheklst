@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://api.github.com https://raw.githubusercontent.com; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'self'">
+<meta name="theme-color" content="#f5f6fa">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Cheklst">
+<meta name="description" content="Checklists for everything: travel, hiking, the car, home.">
+<title>Cheklst</title>
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="apple-touch-icon" href="./icon-192.png">
+<link rel="icon" href="./icon.svg" type="image/svg+xml">
+<script src="./theme.js"></script>
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+<div class="app">
+  <header class="brand"><div><span class="brand-icon">✓</span><strong>Cheklst</strong></div><span id="connection" class="eyebrow"></span></header>
+  <div id="error" role="status" hidden></div>
+  <main id="main" tabindex="-1">
+    <section id="startup" role="status" aria-live="polite" style="text-align:center;padding:12vh 12px">
+      <div style="font-size:34px;font-weight:700">Cheklst</div>
+      <p id="startup-message">Opening your checklists…</p>
+      <button id="startup-retry" hidden>Try again</button>
+    </section>
+  </main>
+  <div id="return-bar" hidden></div>
+  <nav class="bottom" aria-label="Main navigation">
+    <button type="button" data-action="home" class="nav-button">☰ <span>Home</span></button>
+    <button type="button" data-action="resume" class="nav-button" id="resume" hidden>↩ <span>Resume</span></button>
+    <button type="button" data-action="new" class="nav-button new-button">＋ <span>New</span></button>
+    <button type="button" data-action="settings" class="nav-button">⚙ <span>Settings</span></button>
+  </nav>
+</div>
+<input id="backup-import" type="file" accept=".json,application/json" hidden>
+<script src="./startup.js"></script>
+<script type="module" src="./app.js"></script>
+</body>
+</html>
