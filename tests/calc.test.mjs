@@ -36,3 +36,46 @@ test('blocks share variables; saved inputs override defaults; errors stay local'
   assert.equal(substitute('Need {{ c }} and {{zz}}',{c:12.5}),'Need 12.5 and zz?');
   assert.equal(format(1234.56789),(1234.5679).toLocaleString(undefined,{maximumFractionDigits:4}));
 });
+
+test('logic words, yes/no, multi-line formulas and || inside calc lines',()=>{
+  const body=`input temp = 70 | Temperature
+input strenuous = no | Strenuous?
+let rate = if(temp >= 85 or strenuous, 1,
+              if(temp >= 75, 0.75, 0.5))
+show a = if(temp >= 85 || strenuous, 1, 0) | A
+show liters = round(4 * rate * 1.2, 1) | Liters`;
+  let r=runCalcs([{kind:'calc',line:0,body}]).results[0];
+  assert.equal(r.error,null);
+  assert.deepEqual(r.outputs.map(o=>o.value),[0,2.4]);
+  assert.deepEqual(r.inputs.map(i=>[i.type,i.raw,i.value]),[['number','70',70],['bool','no',0]]);
+  r=runCalcs([{kind:'calc',line:0,body}],{strenuous:'yes'}).results[0];
+  assert.deepEqual(r.outputs.map(o=>o.value),[1,4.8]);
+  assert.equal(evaluate('not yes and true',{}),0);
+});
+test('choice inputs use the chosen option’s number',()=>{
+  const body='input terrain = moderate | Terrain | flat: 1, moderate: 1.1, steep: 1.25\ninput mood = | Mood | calm, busy\nshow f = terrain | F\nshow m = mood | M';
+  let r=runCalcs([{kind:'calc',line:0,body}]).results[0];
+  assert.deepEqual(r.outputs.map(o=>o.value),[1.1,1],'blank default picks the first; bare names number from 1');
+  r=runCalcs([{kind:'calc',line:0,body}],{terrain:'Steep',mood:'busy'}).results[0];
+  assert.deepEqual(r.outputs.map(o=>o.value),[1.25,2]);
+  assert.throws(()=>parseCalc('input t = rocky | T | flat: 1, steep: 2'),/isn’t one of the options/);
+  assert.throws(()=>parseCalc('let t = 1 | T | a: 1, b: 2'),/only inputs/);
+});
+test('new functions',()=>{
+  assert.equal(evaluate('clamp(12, 0, 10)'),10);
+  assert.equal(evaluate('interpolate(77.5, 65, 0.5, 90, 1)'),0.75);
+  assert.equal(evaluate('interpolate(100, 65, 0.5, 90, 1)'),1,'held flat beyond the range');
+  assert.equal(evaluate('sum(1,2,3) + avg(2,4)'),9);
+  assert.equal(evaluate('round(sin(30), 6)'),0.5);
+  assert.equal(evaluate('log(1000)'),3);
+});
+test('show can display or refine a let; failed lets explain themselves',()=>{
+  let r=runCalcs([{kind:'calc',line:0,body:'input length = 10 | L\ninput speed = 2.5 | S\nlet hours = length / speed\nshow hours = round(hours, 1) | Hours\nshow h2 | Again'}]).results[0];
+  assert.equal(r.error,null);assert.equal(r.outputs[0].value,4);
+  r=runCalcs([{kind:'calc',line:0,body:'let hours = 4\nshow hours | Hours'}]).results[0];
+  assert.equal(r.outputs[0].value,4);
+  r=runCalcs([{kind:'calc',line:0,body:'input x = 1 | X\nlet rate = if(x > 0, 1\nshow out = rate * 2 | Out'}]).results[0];
+  assert.match(r.problems[0].error,/Expected/);
+  assert.match(r.outputs[0].error,/needs “rate”, which couldn’t be calculated/);
+  assert.throws(()=>parseCalc('input and = 1 | A'),/built-in/);
+});

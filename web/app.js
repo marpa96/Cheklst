@@ -9,9 +9,11 @@ import {pageTransition,viewTransition,flowHTML,animateFlows,setFlow,haptic,confe
 import {toast} from './toast.js';
 import {openSheet,closeSheet} from './sheet.js';
 import {openCommand} from './command.js';
+import {runJS,runJSBlocks} from './jscalc.js';
+import {JS_TEMPLATE} from './jsrunner.js';
 import {dueInfo,dueList,lastDone,nextDue,relativeDay,describeSchedule,addInterval,dayKey,setSchedule,recordCompletion,UNITS} from './schedule.js';
 
-export const BUILD='3';
+export const BUILD='4';
 const KEY='cheklst.state.v1',MODE_KEY='cheklst.runMode.v1';
 const $=s=>document.querySelector(s), main=$('#main');
 const escape=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -22,6 +24,7 @@ let state, page='home', categoryId=null, editingCategory=null, backupCandidate=n
 let session={};                     // library checklist text for this app session (not persisted unless saved offline)
 let library={busy:false,message:''};
 let scrollTimer;
+let js={id:null,results:{},vars:{}},jsSeq=0;   // latest JavaScript calculation results for the open checklist
 let runMode='list';try{runMode=localStorage.getItem(MODE_KEY)==='focus'?'focus':'list';}catch{}
 
 // ---------- state ----------
@@ -81,6 +84,8 @@ function render(){
   $('#resume').hidden=!active()||page==='run';
   document.querySelectorAll('.bottom [data-action]').forEach(b=>b.setAttribute('aria-current',b.dataset.action===page||(b.dataset.action==='home'&&['category','all'].includes(page))?'page':'false'));
   renderHeader();updateReturn();bindGestures();animateFlows(document);updateBadge();
+  if(page==='run')refreshJS();
+  if(page==='edit')previewAllJS();
 }
 
 // ---------- shared pieces ----------
@@ -168,10 +173,67 @@ function headingHTML(b,vars){
 }
 function calcHTML(b,result){
   if(result.error)return `<div class="calc card" data-line="${b.line}" id="line-${b.line}"><span class="eyebrow">CALCULATION</span><p class="calc-error">${escape(result.error)}</p></div>`;
-  const inputs=result.inputs.map(i=>`<div class="calc-field"><label for="calc-${escape(i.name)}" data-scrub="${escape(i.name)}" title="Drag sideways to adjust">${escape(i.label)} <span class="scrub-hint" aria-hidden="true">⇔</span></label><div class="stepper">${button('calc-step','−','',`data-name="${escape(i.name)}" data-dir="-1" aria-label="Decrease ${escape(i.label)}"`)}<input id="calc-${escape(i.name)}" data-calc="${escape(i.name)}" inputmode="decimal" autocomplete="off" value="${escape(i.raw)}" ${i.error?'aria-invalid="true"':''}>${button('calc-step','+','',`data-name="${escape(i.name)}" data-dir="1" aria-label="Increase ${escape(i.label)}"`)}</div></div>`).join('');
-  const outputs=result.outputs.map(o=>`<div class="calc-output"><span>${escape(o.label)}</span><strong data-output="${escape(o.name)}" title="${escape(o.error||'')}">${o.error?'—':flowHTML(`out-${o.name}`,format(o.value))}</strong></div>`).join('');
-  return `<div class="calc card" data-line="${b.line}" id="line-${b.line}"><span class="eyebrow">CALCULATION</span>${result.title?`<h3>${escape(result.title)}</h3>`:''}<div class="calc-grid">${inputs}</div>${outputs}</div>`;
+  const inputs=result.inputs.map(i=>calcInputHTML(i)).join('');
+  const outputs=result.outputs.map(o=>`<div class="calc-output"><span>${escape(o.label)}</span><strong data-output="${escape(o.name)}">${o.error?'—':flowHTML(`out-${o.name}`,format(o.value))}</strong></div><p class="calc-error" data-output-error="${escape(o.name)}" ${o.error?'':'hidden'}>${escape(o.error||'')}</p>`).join('');
+  const problems=(result.problems||[]).map(p=>`<p class="calc-error">“${escape(p.name)}”: ${escape(p.error)}</p>`).join('');
+  return `<div class="calc card" data-line="${b.line}" id="line-${b.line}"><span class="eyebrow">CALCULATION</span>${result.title?`<h3>${escape(result.title)}</h3>`:''}<div class="calc-grid">${inputs}</div>${outputs}${problems}</div>`;
 }
+// Inputs pick their control from how they're written: a number field, a yes/no switch, or choices.
+function calcInputHTML(i){
+  const name=escape(i.name),label=escape(i.label),fid='calc-'+String(i.name).replace(/[^A-Za-z0-9_-]/g,'_');
+  if(i.type==='bool')return `<div class="calc-field wide"><label class="switch inline calc-switch"><input type="checkbox" data-calc-bool="${name}" ${i.value?'checked':''}><span class="slider" aria-hidden="true"></span><span>${label}</span></label></div>`;
+  if(i.type==='choice')return `<div class="calc-field wide"><span class="calc-label" id="${fid}-label">${label}</span><div class="choice-row" role="radiogroup" aria-labelledby="${fid}-label">${i.options.map(o=>button('calc-choice',escape(o.label),o.label===i.raw?'selected':'',`data-name="${name}" data-value="${escape(o.label)}" role="radio" aria-checked="${o.label===i.raw}"`)).join('')}</div></div>`;
+  return `<div class="calc-field"><label for="${fid}" data-scrub="${escape(i.name)}" title="Drag sideways to adjust">${escape(i.label)} <span class="scrub-hint" aria-hidden="true">⇔</span></label><div class="stepper">${button('calc-step','−','',`data-name="${escape(i.name)}" data-dir="-1" aria-label="Decrease ${escape(i.label)}"`)}<input id="${fid}" data-calc="${escape(i.name)}" inputmode="decimal" autocomplete="off" value="${escape(i.raw)}" ${i.error?'aria-invalid="true"':''}>${button('calc-step','+','',`data-name="${escape(i.name)}" data-dir="1" aria-label="Increase ${escape(i.label)}"`)}</div></div>`;
+}
+// A JavaScript calculation card. Its inputs and results come from running the code in the sandbox.
+function jsHTML(b,res){
+  const open=`<div class="calc card js-calc" data-line="${b.line}" id="line-${b.line}"><span class="eyebrow">CALCULATION · JS</span>`;
+  if(!res)return `${open}<p class="help">Calculating…</p></div>`;
+  const inputs=res.inputs.map(calcInputHTML).join('');
+  const outputs=res.outputs.map((o,k)=>`<div class="calc-output"><span>${escape(o.label)}</span><strong data-output="js-${b.line}-${k}" class="${typeof o.value==='string'?'text':''}">${o.value===null?'—':typeof o.value==='number'?flowHTML(`js-${b.line}-${k}`,format(o.value)):escape(o.value)}</strong></div>`).join('');
+  return `${open}${res.title?`<h3>${escape(res.title)}</h3>`:''}<div class="calc-grid">${inputs}</div>${outputs}${res.error?`<p class="calc-error">${escape(res.error)}</p>`:''}</div>`;
+}
+// Re-run the open checklist's JavaScript calculations. Numbers update in place while typing;
+// the page re-renders when the shape changes (new inputs, an error appears or clears).
+function refreshJS({live=false}={}){
+  const r=run();if(page!=='run'||!r)return;
+  const id=state.active,blocks=parse(r.markdown);
+  if(!blocks.some(b=>b.kind==='js')){js={id,results:{},vars:{}};return;}
+  const mine=++jsSeq,saved={...(r.calc||{})};
+  runJSBlocks(blocks,saved,runCalcs(blocks,saved).vars).then(out=>{
+    if(mine!==jsSeq||state.active!==id)return;
+    if(js.id===id&&JSON.stringify(out)===JSON.stringify({results:js.results,vars:js.vars}))return;
+    const shape=o=>JSON.stringify(Object.entries(o.results).map(([l,x])=>[l,x.title,x.error,x.inputs.map(i=>[i.type,i.label,i.raw,i.options]),x.outputs.map(o=>[o.label,typeof o.value])]));
+    const before=js.id===id?shape(js):null;
+    js={id,...out};
+    if(page!=='run')return;
+    const typing=!!document.activeElement?.closest?.('[data-calc]');
+    if(before===shape(out)||(live&&typing)){
+      for(const [line,res] of Object.entries(out.results))res.outputs.forEach((o,k)=>{
+        const el=main.querySelector(`[data-output="js-${line}-${k}"]`);if(!el)return;
+        if(typeof o.value==='number'){const f=el.querySelector('.flow');if(f)setFlow(f,format(o.value));else el.innerHTML=flowHTML(`js-${line}-${k}`,format(o.value));}
+        else el.textContent=o.value??'—';
+      });
+      if(!typing&&Object.keys(out.vars).length)render(); // refresh {{names}} in items
+      return;
+    }
+    if(!typing)render();
+  });
+}
+// Editor preview for JavaScript rows: runs with the starting values.
+const jsPreviewTimers={};
+function previewJS(i,code){
+  clearTimeout(jsPreviewTimers[i]);
+  jsPreviewTimers[i]=setTimeout(async()=>{
+    const res=await runJS(code);const el=main.querySelector(`[data-preview="${i}"]`);if(!el)return;
+    const lines=[];
+    if(res.error)lines.push(`<p class="calc-error">${escape(res.error)}</p>`);
+    else lines.push(`<p class="help">✓ ${res.inputs.length} input${res.inputs.length===1?'':'s'}${res.outputs.map(o=>` · ${escape(o.label)} = ${o.value===null?'—':escape(typeof o.value==='number'?format(o.value):o.value)}`).join('')}</p>`);
+    for(const l of res.logs.slice(0,5))lines.push(`<p class="help mono-line">console: ${escape(l)}</p>`);
+    el.innerHTML=lines.join('');
+  },250);
+}
+function previewAllJS(){state.draft?.rows?.forEach((row,i)=>{if(row.type==='js')previewJS(i,row.text);});}
 // Timer / counter controls chosen from what the item says.
 function widgetsHTML(b,r,text){
   const {timer,count}=detectWidgets(text);let html='';
@@ -199,6 +261,7 @@ function blockHTML(b,r,calc){
   if(b.kind==='task')return taskHTML(b,r,vars);
   if(b.kind==='heading')return headingHTML(b,vars);
   if(b.kind==='calc')return calcHTML(b,calc.results[b.line]);
+  if(b.kind==='js')return jsHTML(b,js.id===state.active?js.results[b.line]:null);
   if(b.callout)return `<aside data-line="${b.line}" id="line-${b.line}" class="note callout ${b.callout}"><strong class="callout-label">${['caution','warning'].includes(b.callout)?'⚠':'ⓘ'} ${b.callout.toUpperCase()}</strong><div>${renderInline(substitute(b.body,vars))}</div></aside>`;
   if(b.kind==='note')return `<aside data-line="${b.line}" id="line-${b.line}" class="note">${renderInline(substitute(b.text,vars))}</aside>`;
   if(b.kind==='table'){
@@ -233,6 +296,7 @@ function completionHTML(){
 }
 function runner(){
   const c=active(),r=run(),t=tasks(r),blocks=parse(r.markdown).filter(b=>!(b.kind==='heading'&&b.level===1&&b.text.trim()===c.title)),calc=runCalcs(blocks,r.calc||{});
+  if(js.id===state.active)Object.assign(calc.vars,js.vars);
   let html=runBanners(c,r);
   if(runMode==='focus'&&t.length&&!complete(r))return html+focusHTML(blocks,r,calc);
   html+=blocks.map(b=>blockHTML(b,r,calc)).join('');
@@ -333,10 +397,11 @@ setInterval(tickTimers,500);
 // ---------- calculations ----------
 function updateCalcLive(name,value){
   change(s=>{const r=s.runs[s.active];r.calc??={};r.calc[name]=value;},false);
+  refreshJS({live:true});
   const calc=runCalcs(parse(run().markdown),run().calc);
   for(const result of Object.values(calc.results))for(const o of result.outputs){
     const el=main.querySelector(`[data-output="${CSS.escape(o.name)}"]`);if(!el)continue;
-    el.title=o.error||'';
+    const note=main.querySelector(`[data-output-error="${CSS.escape(o.name)}"]`);if(note){note.hidden=!o.error;note.textContent=o.error||'';}
     if(o.error){el.textContent='—';continue;}
     const flow=el.querySelector('.flow');if(flow)setFlow(flow,format(o.value));else el.innerHTML=flowHTML(`out-${o.name}`,format(o.value));
   }
@@ -380,7 +445,7 @@ function editor(){
     html+=`<textarea id="draft-markdown" class="source" data-draft="markdown" spellcheck="false">${escape(d.markdown)}</textarea><p class="help">Use <code>- [ ] item</code> for checkboxes, <code>## Heading</code> for sections, <code>&gt; note</code> for notes, and a <code>\`\`\`calc</code> block for calculations.</p>`;
   }else{
     d.rows.forEach((row,i)=>{html+=rowEditor(row,i,d.rows.length);});
-    html+=`<div class="add-row">${[['item','＋ Item'],['heading','＋ Heading'],['note','＋ Note'],['calc','＋ Calculation']].map(([t,l])=>button('add-row',l,'outline small',`data-type="${t}"`)).join('')}</div>`;
+    html+=`<div class="add-row">${[['item','＋ Item'],['heading','＋ Heading'],['note','＋ Note'],['calc','＋ Calculation'],['js','＋ JavaScript']].map(([t,l])=>button('add-row',l,'outline small',`data-type="${t}"`)).join('')}</div>`;
     html+='<p class="help">Tip: items that mention a time (“simmer 10 min”) get a timer, and items that start with a number (“3 pairs of socks”) get a counter.</p>';
   }
   html+=`<div class="editor-actions">${button('save-draft','Save checklist','primary full')}${button('discard-draft','Discard changes','quiet full')}</div>`;
@@ -389,10 +454,19 @@ function editor(){
 function rowEditor(row,i,count){
   const typeSelect=`<select data-row-type="${i}" aria-label="Row type">${ROW_TYPES.map(([v,l])=>`<option value="${v}" ${v===row.type?'selected':''}>${l}</option>`).join('')}</select>`;
   let body='';
-  if(row.type==='calc'){
+  if(row.type==='js'){
+    body=`<textarea class="mono" data-row="${i}" rows="8" spellcheck="false" autocapitalize="off" autocorrect="off" placeholder="${escape(JS_TEMPLATE)}">${escape(row.text)}</textarea><div class="calc-preview" data-preview="${i}"><p class="help">Running…</p></div><details class="calc-help"><summary>How JavaScript calculations work</summary><div class="help calc-doc">
+<p>Plain JavaScript. It runs in a sealed sandbox: no internet, no access to your data, and it’s stopped after 1 second.</p>
+<p><code>input("Label", 4)</code> number field → a number<br><code>yesno("Label", false)</code> switch → true/false<br><code>choice("Label", ["a", "b"])</code> or <code>choice("Label", {easy: 0.9, hard: 1.25}, "easy")</code> buttons → the choice or its value<br><code>show("Label", value, "name")</code> a result; with a name, write <code>{{name}}</code> in any item.<br><code>title("Card title")</code></p>
+<p>Also: <code>vars.name</code> (results from other calculations), <code>round(x, digits)</code>, <code>clamp(x, lo, hi)</code>, <code>interpolate(x, x1, y1, x2, y2)</code>, all of <code>Math</code>, and <code>console.log</code> (shown here).</p></div>${button('js-template','Insert example','outline small',`data-row="${i}"`)}</details>`;
+  }else if(row.type==='calc'){
     let preview='';
     try{const result=runCalcs([{kind:'calc',line:0,body:row.text}]).results[0];preview=result.error?`<p class="calc-error">${escape(result.error)}</p>`:`<p class="help">✓ ${result.inputs.length} input${result.inputs.length===1?'':'s'}, ${result.outputs.length} result${result.outputs.length===1?'':'s'}${result.outputs.map(o=>` · ${escape(o.label)} = ${o.error?escape(o.error):escape(format(o.value))}`).join('')}</p>`;}catch(e){preview=`<p class="calc-error">${escape(e.message)}</p>`;}
-    body=`<textarea class="mono" data-row="${i}" rows="6" spellcheck="false" placeholder="${escape(CALC_TEMPLATE)}">${escape(row.text)}</textarea><div class="calc-preview" data-preview="${i}">${preview}</div><details class="calc-help"><summary>How calculations work</summary><p class="help"><code>input name = 10 | Label</code> — a number you type while using the checklist.<br><code>let name = formula</code> — a hidden working value.<br><code>show name = formula | Label</code> — a result shown on the card.<br>Formulas use + − * / ^ %, parentheses, comparisons, and min, max, round(x, digits), floor, ceil, abs, sqrt, pow, if(test, a, b). Write <code>{{name}}</code> in any item or note to show a value there.</p>${button('calc-template','Insert example','outline small',`data-row="${i}"`)}</details>`;
+    body=`<textarea class="mono" data-row="${i}" rows="6" spellcheck="false" placeholder="${escape(CALC_TEMPLATE)}">${escape(row.text)}</textarea><div class="calc-preview" data-preview="${i}">${preview}</div><details class="calc-help"><summary>How calculations work</summary><div class="help calc-doc">
+<p><code>input name = 10 | Label</code> a number you type in.<br><code>input name = no | Label</code> a yes/no switch (1 or 0 in formulas).<br><code>input name = moderate | Label | flat: 1, moderate: 1.1, steep: 1.25</code> pick one; its number is used.</p>
+<p><code>let name = formula</code> a hidden working value.<br><code>show name = formula | Label</code> a result on the card. <code>show name | Label</code> shows a value from a <code>let</code>.</p>
+<p>Formulas: <code>+ − * / ^ %</code>, parentheses, <code>&lt; &gt; &lt;= &gt;= == !=</code>, <code>and or not</code>, <code>yes no</code>.<br>Functions: <code>if(test, a, b)</code>, <code>min max clamp(x, low, high)</code>, <code>interpolate(x, x1, y1, x2, y2)</code>, <code>round(x, digits) floor ceil trunc abs sign</code>, <code>sqrt pow exp log ln</code>, <code>sin cos tan asin acos atan</code> (degrees), <code>sum avg</code>.</p>
+<p>A long formula can continue on the next lines. Write <code>{{name}}</code> in any item or note to show a value there.</p></div>${button('calc-template','Insert example','outline small',`data-row="${i}"`)}</details>`;
   }else{
     const placeholder={item:'What to check or do',heading:'Section name',note:'Something to keep in mind',text:'Any Markdown'}[row.type];
     body=`<textarea data-row="${i}" rows="${row.type==='text'||row.type==='note'?3:1}" placeholder="${placeholder}">${escape(row.text)}</textarea>`;
@@ -616,6 +690,7 @@ function handle(action,b){
       if(n>=target)setTask(line,'done');
       return;
     }
+    case 'calc-choice':return change(s=>{const r=s.runs[s.active];r.calc??={};r.calc[b.dataset.name]=b.dataset.value;});
     case 'calc-step':{
       const input=main.querySelector(`[data-calc="${CSS.escape(b.dataset.name)}"]`);if(!input)return;
       const value=stepValue(input.value,Number(b.dataset.dir));input.value=value;updateCalcLive(b.dataset.name,value);render();
@@ -643,6 +718,7 @@ function handle(action,b){
     case 'remove-row':return change(s=>{s.draft.rows.splice(Number(b.dataset.row),1);if(!s.draft.rows.length)s.draft.rows.push(newRow('item'));});
     case 'move-row':return change(s=>{s.draft.rows=moveRow(s.draft.rows,Number(b.dataset.row),Number(b.dataset.dir));});
     case 'indent':return change(s=>{const r=s.draft.rows[Number(b.dataset.row)];r.depth=Math.max(0,Math.min(4,(r.depth||0)+Number(b.dataset.dir)));});
+    case 'js-template':return change(s=>{const r=s.draft.rows[Number(b.dataset.row)];r.text=r.text.trim()?r.text+'\n\n'+JS_TEMPLATE:JS_TEMPLATE;});
     case 'calc-template':return change(s=>{const r=s.draft.rows[Number(b.dataset.row)];r.text=r.text.trim()?r.text+'\n'+CALC_TEMPLATE:CALC_TEMPLATE;});
     case 'new-category-inline':return newCategorySheet();
     case 'sheet-add-category':{
@@ -687,6 +763,7 @@ main.addEventListener('input',e=>{
   if(t.dataset.draft==='title'||t.dataset.draft==='markdown'){change(s=>{s.draft[t.dataset.draft]=t.value;},false);return;}
   if(t.dataset.row!==undefined&&t.tagName==='TEXTAREA'){
     const i=Number(t.dataset.row);change(s=>{s.draft.rows[i].text=t.value;},false);
+    if(state.draft.rows[i].type==='js')previewJS(i,t.value);
     if(state.draft.rows[i].type==='calc'){const p=main.querySelector(`[data-preview="${i}"]`);if(p){const result=runCalcs([{kind:'calc',line:0,body:t.value}]).results[0];p.innerHTML=result.error?`<p class="calc-error">${escape(result.error)}</p>`:`<p class="help">✓ ${result.outputs.map(o=>`${escape(o.label)} = ${o.error?escape(o.error):escape(format(o.value))}`).join(' · ')||'No results yet'}</p>`;}}
     if(state.draft.rows[i].type==='item'){
       const row=t.closest('.editor-row'),w=detectWidgets(t.value);let hint=row.querySelector('.widget-hint');
@@ -707,6 +784,7 @@ document.addEventListener('change',e=>{
     return;
   }
   if(t.dataset.calc){render();return;} // refresh {{values}} in items after editing an input
+  if(t.dataset.calcBool){haptic(6);change(s=>{const r=s.runs[s.active];r.calc??={};r.calc[t.dataset.calcBool]=t.checked?'yes':'no';});return;}
   if(t.dataset.draft==='category'){change(s=>{s.draft.category=t.value;});return;}
   if(t.dataset.rowType!==undefined){const i=Number(t.dataset.rowType);change(s=>{const r=s.draft.rows[i];r.type=t.value;if(t.value==='item')r.depth??=0;if(t.value==='note')r.callout??='';});return;}
   if(t.dataset.rowCallout!==undefined){const i=Number(t.dataset.rowCallout);change(s=>{s.draft.rows[i].callout=t.value;},false);return;}

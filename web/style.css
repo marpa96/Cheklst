@@ -338,9 +338,8 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.6;b
 .stepper input{border:0!important;box-shadow:none!important;background:transparent!important;text-align:center;font-size:18px;font-weight:700;padding:6px 2px!important;min-width:0}
 .calc input[aria-invalid=true]{color:var(--danger)}
 .calc-output{display:flex;justify-content:space-between;align-items:baseline;gap:12px;border-top:1px solid var(--line);margin-top:12px;padding-top:10px}
-.calc-output span{color:var(--muted);font-size:14px}
-.calc-output strong{font:800 26px var(--display);background:linear-gradient(100deg,var(--accent),var(--accent-2));-webkit-background-clip:text;background-clip:text;color:transparent}
-.calc-output strong .flow{-webkit-text-fill-color:currentColor}
+.calc-output>span{color:var(--muted);font-size:14px}
+.calc-output strong{font:800 26px var(--display);color:var(--accent)}
 .calc-error{color:var(--danger);font-size:13px;margin:6px 0}
 .calc-preview{min-height:20px}
 .calc-help{border:0;background:none;padding:0;margin:4px 0;box-shadow:none}
@@ -463,3 +462,18 @@ body:has(#return-bar:not([hidden])) .toasts{bottom:calc(136px + env(safe-area-in
 .history ul{list-style:none;margin:6px 0 0;padding:0}
 .history li{display:flex;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid var(--line);font-size:14px}
 .history li small{color:var(--muted)}
+
+/* ---------- calculation switches and choices ---------- */
+.calc-field.wide{grid-column:1/-1}
+.calc-switch{margin:12px 0 2px;font-size:14px;font-weight:600;color:var(--text);cursor:pointer}
+.calc-label{display:block;margin:10px 0 6px;font-weight:650;color:var(--muted);font-size:12px}
+.choice-row{display:flex;flex-wrap:wrap;gap:6px}
+.choice-row button{flex:1 1 auto;min-height:40px;padding:8px 12px;font-size:14px;border-radius:12px;background:var(--surface-solid);border:1px solid var(--input-line);color:var(--text);font-weight:600}
+.choice-row button.selected{background:linear-gradient(110deg,var(--accent),var(--accent-2));border-color:transparent;color:var(--on-accent)}
+.calc .calc-error{margin:4px 0 0;text-align:right}
+.calc-doc p{margin:0 0 8px}
+.js-calc .eyebrow{letter-spacing:1.3px}
+.add-row button:last-child:nth-child(odd){grid-column:1/-1}
+.mono-line{font-family:ui-monospace,monospace;font-size:12px;overflow-wrap:anywhere}
+textarea.mono{tab-size:2}
+.calc-output strong.text{font:700 16px/1.35 var(--font);text-align:right}

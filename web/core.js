@@ -16,7 +16,9 @@ export function parse(md,{plainLists=true}={}) {
       while (i < lines.length && !lines[i].trim().startsWith(fence[1])) i++;
       const body=lines.slice(start+1,i).join('\n');
       if (i < lines.length) i++;
-      blocks.push({line:start,end:i,kind:fence[2]==='calc'?'calc':'code',lang:fence[2]||'',body,text:lines.slice(start,i).join('\n')}); continue;
+      // ```calc and ```js blocks are calculations; other fences are shown as code.
+      const lang=(fence[2]||'').toLowerCase();
+      blocks.push({line:start,end:i,kind:lang==='calc'?'calc':['js','javascript'].includes(lang)?'js':'code',lang,body,text:lines.slice(start,i).join('\n')}); continue;
     }
     const task = raw.match(/^(\s*(?:[-*+]|\d+[.)])\s+\[[ xX]\]\s+)(.*)$/);
     if (task) { blocks.push({line:i,end:++i,kind:'task',text:task[2],prefix:task[1],depth:raw.match(/^\s*/)[0].length}); continue; }
