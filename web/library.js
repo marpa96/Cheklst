@@ -49,7 +49,7 @@ export function applyLibrary(state,pkg,session={},{repo=state.library?.repo}={})
   // Gone from GitHub: keep hidden only while something on this device still depends on it.
   for(const c of [...state.checklists]){
     if(c.source!=='library'||present.has(c.id))continue;
-    if(state.runs[c.id]||c.offline||c.completions?.length){if(!c.retired){c.retired=true;counts.removed++;}}
+    if(state.runs[c.id]||c.offline||c.completions?.length||c.notes?.length){if(!c.retired){c.retired=true;counts.removed++;}}
     else{state.checklists=state.checklists.filter(n=>n!==c);counts.removed++;}
   }
   state.library={...state.library,repo:repo??'',syncedAt:new Date().toISOString(),commit:pkg.source_commit??null,bundled:!!pkg.bundled};

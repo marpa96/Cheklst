@@ -1,5 +1,5 @@
 import {renderInline,webLinks} from './links.js';
-import {inProgress,syncCompletion,parse,latest,newState,markdownOf,openChecklist,versionOf,tasks,current,complete,setItem,restart,closeRun,nextChecklist,sortChecklists,saveDraft,restore,deleteChecklist,copyChecklist,addCategory,renameCategory,deleteCategory,moveCategory,ensureCategory,validateState,persistable,automaticTarget,UNCATEGORIZED} from './core.js';
+import {inProgress,syncCompletion,parse,latest,newState,markdownOf,openChecklist,versionOf,tasks,current,complete,setItem,restart,closeRun,nextChecklist,sortChecklists,saveDraft,restore,deleteChecklist,copyChecklist,addCategory,renameCategory,deleteCategory,moveCategory,ensureCategory,validateState,persistable,automaticTarget,UNCATEGORIZED,noteKey,getNote,setNote,NOTE_LIMIT} from './core.js';
 import {runCalcs,substitute,format,CALC_TEMPLATE} from './calc.js';
 import {applyLibrary,setOffline,downloadLibrary,repoName,DEFAULT_REPO} from './library.js';
 import {ROW_TYPES,CALLOUTS,markdownToRows,rowsToMarkdown,newRow,moveRow} from './editor.js';
@@ -13,7 +13,7 @@ import {runJS,runJSBlocks} from './jscalc.js';
 import {JS_TEMPLATE} from './jsrunner.js';
 import {dueInfo,dueList,lastDone,nextDue,relativeDay,describeSchedule,addInterval,dayKey,setSchedule,recordCompletion,UNITS} from './schedule.js';
 
-export const BUILD='4';
+export const BUILD='5';
 const KEY='cheklst.state.v1',MODE_KEY='cheklst.runMode.v1';
 const $=s=>document.querySelector(s), main=$('#main');
 const escape=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -234,6 +234,38 @@ function previewJS(i,code){
   },250);
 }
 function previewAllJS(){state.draft?.rows?.forEach((row,i)=>{if(row.type==='js')previewJS(i,row.text);});}
+// ---------- item notes ----------
+function noteFor(b){return getNote(active(),noteKey(b));}
+const openNotes=new Set();   // notes expanded to show every line (this session only)
+function noteHTML(b,note,r){
+  if(!note)return r?.states[b.line]==='done'?'':`<button type="button" class="add-note" data-action="note" data-line="${b.line}">＋ Add a note</button>`;
+  const key=noteKey(b),lines=note.text.split('\n'),more=lines.length-1,open=openNotes.has(key);
+  const toggle=more?`<button type="button" class="note-more" data-action="note-expand" data-line="${b.line}" aria-expanded="${open}">${open?'Show less':`${more} more line${more===1?'':'s'}`}</button>`:'';
+  return `<div class="item-note" title="Your note · ${escape(relativeDay(new Date(note.updated)))}"><span class="note-body" data-action="note" data-line="${b.line}">${renderInline(open?note.text:lines[0])}</span>${toggle}</div>`;
+}
+function noteSheet(line){
+  const c=active(),b=tasks(run()).find(t=>t.line===line);if(!c||!b)return;
+  const key=noteKey(b),note=getNote(c,key),initial=note?.text??'',vars=runCalcs(parse(run().markdown),run().calc||{}).vars;
+  let removed=false;
+  const html=`<h2 class="sheet-title">${note?'Your note':'Add a note'}</h2><p class="note-for">${renderInline(substitute(b.text,vars),{links:false})}</p>`+
+    `<textarea id="note-text" class="note-input" rows="5" maxlength="${NOTE_LIMIT}" placeholder="Sizes, where things are, what to watch for next time…" aria-label="Note" autofocus>${escape(initial)}</textarea>`+
+    `<p class="help note-meta"><span>Saved with this checklist, so it’s here every time.</span><span id="note-count"></span></p>`+
+    `<div class="sheet-actions">${button('note-done',note?'Done':'Save note','primary full')}${note?button('note-delete','Delete note','danger-text full'):''}</div>`;
+  const save=()=>{
+    const text=$('#note-text')?.value??initial;
+    if(removed||text.trim()===initial.trim())return;
+    if(!text.trim()&&initial){undoable('Note deleted.',s=>setNote(s.checklists.find(x=>x.id===c.id),key,''));return;}
+    if(change(s=>setNote(s.checklists.find(x=>x.id===c.id),key,text)))haptic(8);
+  };
+  openSheet(html,{label:'Item note',onClose:save});
+  const area=$('#note-text');
+  const count=()=>{const n=area.value.length,el=$('#note-count');if(el)el.textContent=n>NOTE_LIMIT*.8?`${n} / ${NOTE_LIMIT}`:'';};
+  area.addEventListener('input',count);count();
+  area.addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.metaKey||e.ctrlKey)){e.preventDefault();closeSheet();}});
+  area.setSelectionRange(area.value.length,area.value.length);
+  noteSheet.remove=()=>{removed=true;undoable('Note deleted.',s=>setNote(s.checklists.find(x=>x.id===c.id),key,''));};
+}
+
 // Timer / counter controls chosen from what the item says.
 function widgetsHTML(b,r,text){
   const {timer,count}=detectWidgets(text);let html='';
@@ -253,8 +285,8 @@ function widgetsHTML(b,r,text){
   return html?`<div class="task-widgets">${html}</div>`:'';
 }
 function taskHTML(b,r,vars){
-  const status=r.states[b.line],now=current(r)===b.line,text=substitute(b.text,vars);
-  return `<div class="task ${status==='done'?'done':''} ${status==='pending'?'skipped':''} ${now?'current':''}" id="line-${b.line}" data-line="${b.line}" style="margin-left:${Math.min(b.depth,8)*4}px"><button type="button" class="check" data-action="check" data-line="${b.line}" aria-pressed="${status==='done'}"><span class="box" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span><span class="item-copy">${now&&b.sectionPath.length?`<span class="item-context">${escape(b.sectionPath.join(' › '))}</span>`:''}${renderInline(text,{links:false})}</span></button><button type="button" class="pending-button" data-action="pending" data-line="${b.line}" aria-label="${status==='pending'?'Return item to checklist':'Skip for now'}" title="${status==='pending'?'Return to checklist':'Skip for now'}">${status==='pending'?'↩':'◷'}</button>${widgetsHTML(b,r,text)}${webLinks(text).map(link=>`<a class="external-link task-reference" data-web-link href="${escape(link.url)}" target="_blank" rel="noopener noreferrer">${escape(link.label)} ↗</a>`).join('')}</div>`;
+  const status=r.states[b.line],now=current(r)===b.line,text=substitute(b.text,vars),note=noteFor(b);
+  return `<div class="task ${status==='done'?'done':''} ${note?'noted':''} ${status==='pending'?'skipped':''} ${now?'current':''}" id="line-${b.line}" data-line="${b.line}" style="margin-left:${Math.min(b.depth,8)*4}px"><button type="button" class="check" data-action="check" data-line="${b.line}" aria-pressed="${status==='done'}"><span class="box" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span><span class="item-copy">${now&&b.sectionPath.length?`<span class="item-context">${escape(b.sectionPath.join(' › '))}</span>`:''}${renderInline(text,{links:false})}</span></button><button type="button" class="pending-button" data-action="pending" data-line="${b.line}" aria-label="${status==='pending'?'Return item to checklist':'Skip for now'}" title="${status==='pending'?'Return to checklist':'Skip for now'}">${status==='pending'?'↩':'◷'}</button>${noteHTML(b,note,r)}${widgetsHTML(b,r,text)}${webLinks(text).map(link=>`<a class="external-link task-reference" data-web-link href="${escape(link.url)}" target="_blank" rel="noopener noreferrer">${escape(link.label)} ↗</a>`).join('')}</div>`;
 }
 function blockHTML(b,r,calc){
   const vars=calc.vars;
@@ -313,7 +345,7 @@ function focusHTML(blocks,r,calc){
   const text=substitute(b.text,calc.vars),p=progressOf(r);
   let html=`<div class="focus">${context}<div class="focus-stack">`;
   upcoming.slice().reverse().forEach((u,i)=>{html+=`<div class="focus-peek depth-${upcoming.length-i}" aria-hidden="true">${renderInline(substitute(u.text,calc.vars),{links:false})}</div>`;});
-  html+=`<article class="focus-card" data-line="${b.line}" id="line-${b.line}" aria-live="polite"><div class="focus-top"><span class="eyebrow">${b.sectionPath.length?escape(b.sectionPath.join(' › ')):`ITEM ${p.done+p.pending+1-(r.states[line]==='pending'?1:0)} OF ${p.total}`}</span>${r.states[line]==='pending'?'<span class="chip">Skipped earlier</span>':''}</div><p class="focus-text">${renderInline(text,{links:false})}</p>${widgetsHTML(b,r,text)}${webLinks(text).map(link=>`<a class="external-link" data-web-link href="${escape(link.url)}" target="_blank" rel="noopener noreferrer">${escape(link.label)} ↗</a>`).join('')}<div class="focus-actions">${button('focus-skip','◷ Skip','outline',`data-line="${b.line}"`)}${button('focus-done','✓ Done','primary',`data-line="${b.line}"`)}</div><span class="swipe-tag done" aria-hidden="true">DONE</span><span class="swipe-tag skip" aria-hidden="true">SKIP</span></article></div>`;
+  html+=`<article class="focus-card" data-line="${b.line}" id="line-${b.line}" aria-live="polite"><div class="focus-top"><span class="eyebrow">${b.sectionPath.length?escape(b.sectionPath.join(' › ')):`ITEM ${p.done+p.pending+1-(r.states[line]==='pending'?1:0)} OF ${p.total}`}</span>${r.states[line]==='pending'?'<span class="chip">Skipped earlier</span>':''}</div><p class="focus-text">${renderInline(text,{links:false})}</p>${noteHTML(b,noteFor(b),r)}${widgetsHTML(b,r,text)}${webLinks(text).map(link=>`<a class="external-link" data-web-link href="${escape(link.url)}" target="_blank" rel="noopener noreferrer">${escape(link.label)} ↗</a>`).join('')}<div class="focus-actions">${button('focus-skip','◷ Skip','outline',`data-line="${b.line}"`)}${button('focus-done','✓ Done','primary',`data-line="${b.line}"`)}</div><span class="swipe-tag done" aria-hidden="true">DONE</span><span class="swipe-tag skip" aria-hidden="true">SKIP</span></article></div>`;
   html+=`<p class="help center">${upcoming.length?`Up next: ${renderInline(substitute(upcoming[0].text,calc.vars),{links:false})}`:'Last one!'} · Swipe right for done, left to skip.</p></div>`;
   return html;
 }
@@ -546,7 +578,7 @@ function commandItems(){
   const items=[];
   if(page==='run'&&run()){
     const r=run(),vars=runCalcs(parse(r.markdown),r.calc||{}).vars;
-    for(const b of tasks(r))if(r.states[b.line]!=='done')items.push({group:'In this checklist',label:substitute(b.text,vars),hint:b.sectionPath.join(' › '),icon:r.states[b.line]==='pending'?'◷':'○',run:()=>{if(runMode==='focus')setMode('list');jumpAndFlash(b.line);}});
+    for(const b of tasks(r)){const note=noteFor(b);if(r.states[b.line]!=='done'||note)items.push({group:'In this checklist',label:substitute(b.text,vars),hint:note?`📝 ${note.text.split('\n')[0].slice(0,60)}`:b.sectionPath.join(' › '),keywords:note?.text,icon:r.states[b.line]==='done'?'✓':r.states[b.line]==='pending'?'◷':'○',run:()=>{if(runMode==='focus')setMode('list');jumpAndFlash(b.line);}});}
   }
   for(const c of sortChecklists(visible())){
     const r=state.runs[c.id],p=r&&progressOf(r);
@@ -668,6 +700,10 @@ function handle(action,b){
       return;
     }
     case 'mode':return setMode(b.dataset.mode);
+    case 'note':return noteSheet(Number(b.dataset.line));
+    case 'note-done':return;
+    case 'note-expand':{const t=tasks(run()).find(x=>x.line===Number(b.dataset.line));if(t){const k=noteKey(t);openNotes.has(k)?openNotes.delete(k):openNotes.add(k);render();}return;}
+    case 'note-delete':return noteSheet.remove?.();
     case 'cancel':editingCategory=null;render();return;
     case 'check':case 'pending':return setTask(Number(b.dataset.line),action==='check'?'done':'pending');
     case 'focus-done':case 'focus-skip':{

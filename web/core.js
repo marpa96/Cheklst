@@ -109,6 +109,22 @@ export function inProgress(state){
   return Object.entries(state.runs).map(([id,run])=>({c:state.checklists.find(c=>c.id===id),run})).filter(x=>x.c)
     .sort((a,b)=>(b.run.touched||'').localeCompare(a.run.touched||''));
 }
+// ---- Item notes ----
+// Your own notes on an item, kept with the checklist (not the run), so they're still there the
+// next time you do it. An item is identified by its section path and text, so notes follow it
+// when the checklist is edited or updated, as long as the item's wording stays the same.
+export const NOTE_LIMIT=2000;
+export const noteKey=b=>[...(b.sectionPath||[]),String(b.text??'').trim()].join(' › ');
+export function getNote(c,key){return c?.notes?.find(n=>n.key===key)??null;}
+export function setNote(c,key,text,now=new Date()){
+  text=String(text??'').replace(/\r\n?/g,'\n').trim();
+  if(text.length>NOTE_LIMIT)throw new Error(`Keep notes under ${NOTE_LIMIT} characters.`);
+  const rest=(c.notes||[]).filter(n=>n.key!==key);
+  if(text)rest.push({key,text,updated:new Date(now).toISOString()});
+  if(rest.length)c.notes=rest;else delete c.notes;
+  return !!text;
+}
+
 export function restart(state,id,markdown) {
   delete state.runs[id];
   return openChecklist(state,id,markdown);
@@ -160,6 +176,7 @@ export function copyChecklist(state,id,markdown){
   const clean=markdown.split('\n').filter(l=>!/^\s*<!--\s*cheklst-id:.*-->\s*$/.test(l)).join('\n');
   const title=c.source==='device'?c.title+' (copy)':c.title;
   const copy={id:uid(),source:'device',title,category:c.category,revisions:[revision(clean,{title,category:c.category})]};
+  if(c.notes?.length)copy.notes=structuredClone(c.notes);
   state.checklists.push(copy);return copy.id;
 }
 
@@ -219,6 +236,7 @@ export function validateState(s) {
     if(!validSchedule(c.schedule))throw new Error('Invalid repeat schedule.');
     if(c.nextDue!==undefined&&!/^\d{4}-\d{2}-\d{2}$/.test(c.nextDue))throw new Error('Invalid due date.');
     if(c.completions!==undefined&&(!Array.isArray(c.completions)||c.completions.some(d=>typeof d!=='string'||!Number.isFinite(Date.parse(d)))))throw new Error('Invalid completion history.');
+    if(c.notes!==undefined&&(!Array.isArray(c.notes)||c.notes.some(n=>!record(n)||typeof n.key!=='string'||typeof n.text!=='string'||n.text.length>NOTE_LIMIT||!Number.isFinite(Date.parse(n.updated)))))throw new Error('Invalid item notes.');
     if(c.source==='device'){
       if(!Array.isArray(c.revisions)||!c.revisions.length)throw new Error('Invalid checklist revisions.');
       for(const r of c.revisions) if(typeof r.id!=='string' || typeof r.markdown!=='string' || !Number.isFinite(Date.parse(r.date))) throw new Error('Invalid revision data.');
