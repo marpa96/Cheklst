@@ -31,8 +31,8 @@
       "title": "Monthly home check",
       "category": "Home",
       "sequence": null,
-      "markdown": "# Monthly home check\n\n- [ ] Test smoke and CO detectors\n- [ ] Check HVAC filter (replace every 1–3 months)\n- [ ] Clean the dishwasher filter\n- [ ] Run water in unused sinks and showers\n- [ ] Check under sinks for leaks\n- [ ] Clean the range hood filter\n",
-      "hash": "25123b8ad7523854"
+      "markdown": "# Monthly home check\n<!-- repeat: monthly -->\n\n- [ ] Test smoke and CO detectors\n- [ ] Check HVAC filter (replace every 1–3 months)\n- [ ] Clean the dishwasher filter\n- [ ] Run water in unused sinks and showers\n- [ ] Check under sinks for leaks\n- [ ] Clean the range hood filter\n",
+      "hash": "b27e8ec9e74a62ce"
     },
     {
       "id": "lib-5f8377cb40858da9",

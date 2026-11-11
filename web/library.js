@@ -2,6 +2,7 @@
 // Library checklists are read-only in the app (make an editable copy to change one).
 // Their text is kept on the device only when the checklist's "Save offline" toggle is on.
 import {ensureCategory} from './core.js';
+import {parseRepeat} from './schedule.js';
 
 export const FORMAT='cheklst-library-v1';
 export const DEFAULT_REPO='marpa96/Cheklst-Checklists';
@@ -37,7 +38,10 @@ export function applyLibrary(state,pkg,session={},{repo=state.library?.repo}={})
     const fields={path:item.path,title:item.title,category:item.category,sequence:item.sequence??null,hash:item.hash};
     const c=state.checklists.find(c=>c.id===item.id);
     if(c&&c.source!=='library')continue; // never touch a device checklist
-    if(!c){state.checklists.push({id:item.id,source:'library',offline:false,...fields});counts.added++;continue;}
+    // A <!-- repeat: … --> line in the Markdown sets the schedule until it's changed in the app.
+    const repeat=parseRepeat(item.markdown);
+    if(!c){state.checklists.push({id:item.id,source:'library',offline:false,...fields,...(repeat?{schedule:repeat}:{})});counts.added++;continue;}
+    if(c.schedule===undefined&&repeat)c.schedule=repeat;
     if(c.hash!==item.hash||c.title!==item.title||c.category!==item.category||c.path!==item.path||c.retired)counts.updated++;
     Object.assign(c,fields);delete c.retired;
     if(c.offline)c.markdown=item.markdown;
@@ -45,7 +49,7 @@ export function applyLibrary(state,pkg,session={},{repo=state.library?.repo}={})
   // Gone from GitHub: keep hidden only while something on this device still depends on it.
   for(const c of [...state.checklists]){
     if(c.source!=='library'||present.has(c.id))continue;
-    if(state.runs[c.id]||c.offline){if(!c.retired){c.retired=true;counts.removed++;}}
+    if(state.runs[c.id]||c.offline||c.completions?.length){if(!c.retired){c.retired=true;counts.removed++;}}
     else{state.checklists=state.checklists.filter(n=>n!==c);counts.removed++;}
   }
   state.library={...state.library,repo:repo??'',syncedAt:new Date().toISOString(),commit:pkg.source_commit??null,bundled:!!pkg.bundled};

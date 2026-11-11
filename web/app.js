@@ -1,16 +1,17 @@
 import {renderInline,webLinks} from './links.js';
-import {parse,latest,newState,markdownOf,openChecklist,versionOf,tasks,current,complete,setItem,restart,closeRun,nextChecklist,sortChecklists,saveDraft,restore,deleteChecklist,copyChecklist,addCategory,renameCategory,deleteCategory,moveCategory,ensureCategory,validateState,persistable,automaticTarget,UNCATEGORIZED} from './core.js';
+import {inProgress,syncCompletion,parse,latest,newState,markdownOf,openChecklist,versionOf,tasks,current,complete,setItem,restart,closeRun,nextChecklist,sortChecklists,saveDraft,restore,deleteChecklist,copyChecklist,addCategory,renameCategory,deleteCategory,moveCategory,ensureCategory,validateState,persistable,automaticTarget,UNCATEGORIZED} from './core.js';
 import {runCalcs,substitute,format,CALC_TEMPLATE} from './calc.js';
 import {applyLibrary,setOffline,downloadLibrary,repoName,DEFAULT_REPO} from './library.js';
 import {ROW_TYPES,CALLOUTS,markdownToRows,rowsToMarkdown,newRow,moveRow} from './editor.js';
 import {detectWidgets,clock,stepFor,stepValue} from './widgets.js';
 import {startAmbient,phase,hueFor,palette,ambientEnabled,setAmbientEnabled} from './ambient.js';
-import {pageTransition,flowHTML,animateFlows,setFlow,haptic,confetti,swipeable,reduced} from './motion.js';
+import {pageTransition,viewTransition,flowHTML,animateFlows,setFlow,haptic,confetti,swipeable,reduced} from './motion.js';
 import {toast} from './toast.js';
 import {openSheet,closeSheet} from './sheet.js';
 import {openCommand} from './command.js';
+import {dueInfo,dueList,lastDone,nextDue,relativeDay,describeSchedule,addInterval,dayKey,setSchedule,recordCompletion,UNITS} from './schedule.js';
 
-export const BUILD='2';
+export const BUILD='3';
 const KEY='cheklst.state.v1',MODE_KEY='cheklst.runMode.v1';
 const $=s=>document.querySelector(s), main=$('#main');
 const escape=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -57,7 +58,11 @@ function open(id){
   const c=state.checklists.find(c=>c.id===id);if(!c)return;
   if(!state.runs[id]&&!available(c)){notice(`“${c.title}” isn’t saved on this device. Connect to the internet, or turn on Save offline while connected.`);return;}
   savePosition();
-  if(change(s=>openChecklist(s,id,markdownOf(c,session)),false))go('run',{after:restorePosition});
+  const prev=active(),prevRun=run();
+  if(!change(s=>openChecklist(s,id,markdownOf(c,session)),false))return;
+  go('run',{after:restorePosition});
+  // Switching mid-checklist is fine: say where the other one went.
+  if(prev&&prev.id!==id&&prevRun&&state.runs[prev.id]&&!complete(prevRun)){const p=progressOf(prevRun);toast(`“${prev.title}” is saved at ${p.done} of ${p.total}. It’s under In progress on Home.`,{icon:'⏸'});}
 }
 function contextHue(){
   if(page==='category')return category()?hueFor(category().name):null;
@@ -75,7 +80,7 @@ function render(){
   if(hue===null)root.style.removeProperty('--ctx');else root.style.setProperty('--ctx',hue);
   $('#resume').hidden=!active()||page==='run';
   document.querySelectorAll('.bottom [data-action]').forEach(b=>b.setAttribute('aria-current',b.dataset.action===page||(b.dataset.action==='home'&&['category','all'].includes(page))?'page':'false'));
-  renderHeader();updateReturn();bindGestures();animateFlows(document);
+  renderHeader();updateReturn();bindGestures();animateFlows(document);updateBadge();
 }
 
 // ---------- shared pieces ----------
@@ -86,12 +91,14 @@ function offlineToggle(c){
   const label=c.offline?'Saved offline':'Online only';
   return `<label class="switch" title="Save this checklist on this device so it works without internet"><input type="checkbox" data-offline="${escape(c.id)}" ${c.offline?'checked':''} aria-label="Save “${escape(c.title)}” offline"><span class="slider" aria-hidden="true"></span><span class="switch-label">${label}</span></label>`;
 }
+const dueChip=info=>`<span class="due-chip ${info.tone}">${escape(info.label)}</span>`;
 function ring(fraction,content='',cls=''){return `<span class="ring ${cls}" style="--p:${Math.round(Math.max(0,Math.min(1,fraction))*100)}" aria-hidden="true"><span>${content}</span></span>`;}
 function checklistRow(c,i=0){
   const r=state.runs[c.id],p=r?progressOf(r):null;
-  const status=r?`${p.done}/${p.total} done`:c.source==='library'?'From GitHub':'Created in app';
+  const last=lastDone(c),due=dueInfo(c);
+  const status=r?`In progress · ${p.done}/${p.total}`:last?`Done ${relativeDay(last)}`:c.source==='library'?'From GitHub':'Created in app';
   const unavailable=!r&&!available(c);
-  return `<div class="procedure-row ${unavailable?'unavailable':''}" style="--i:${i}" data-search="${escape(c.title+' '+c.category)}"><button type="button" class="procedure" data-action="open" data-id="${escape(c.id)}">${r?ring(p.total?p.done/p.total:0):'<span class="ring empty" aria-hidden="true"></span>'}<span class="copy"><strong>${escape(c.title)}</strong><small>${escape(status)}${unavailable?' · needs internet':''}</small></span><span class="chevron">›</span></button>${offlineToggle(c)}</div>`;
+  return `<div class="procedure-row ${unavailable?'unavailable':''}" style="--i:${i}" data-search="${escape(c.title+' '+c.category)}"><button type="button" class="procedure" data-action="open" data-id="${escape(c.id)}">${r?ring(p.total?p.done/p.total:0):'<span class="ring empty" aria-hidden="true"></span>'}<span class="copy"><strong>${escape(c.title)}</strong><small>${escape(status)}${c.schedule?` · ${escape(describeSchedule(c.schedule))}`:''}${unavailable?' · needs internet':''}</small>${due?dueChip(due):''}</span><span class="chevron">›</span></button>${offlineToggle(c)}</div>`;
 }
 function libraryLine(){
   const l=state.library;
@@ -106,12 +113,24 @@ const SEARCH_ICON='<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><cir
 
 // ---------- pages ----------
 function home(){
-  const a=active(),p=phase();
+  const p=phase();
   let html=`<header class="hero"><span class="eyebrow">${escape(new Date().toLocaleDateString([], {weekday:'long',month:'long',day:'numeric'}))}</span><h1 class="greeting"><span class="grad">${p.greeting}</span> <span class="wave" aria-hidden="true">${p.icon}</span></h1></header>`;
   html+=`<button type="button" class="search-pill" data-action="command">${SEARCH_ICON}<span>Search checklists, items, actions</span><kbd>${shortcut}</kbd></button>`;
-  if(a){
-    const r=run(),pr=progressOf(r),next=tasks(r).find(b=>b.line===current(r));
-    html+=`<button type="button" class="resume-card" data-action="resume" ${hueStyle(a.category)}>${ring(pr.total?pr.done/pr.total:0,`${Math.round(pr.total?pr.done/pr.total*100:0)}%`,'big')}<span class="copy"><span class="eyebrow">CONTINUE · ${escape(a.category)}</span><strong>${escape(a.title)}</strong><small>${next?`Next: ${escape(substitute(next.text,runCalcs(parse(r.markdown),r.calc||{}).vars))}`:'All done'}</small></span><span class="go" aria-hidden="true">→</span></button>`;
+  const running=inProgress(state);
+  if(running.length){
+    const [{c:first,run:r}]=running,pr=progressOf(r),next=tasks(r).find(b=>b.line===current(r));
+    html+=`<button type="button" class="resume-card" data-action="open" data-id="${escape(first.id)}" ${hueStyle(first.category)}>${ring(pr.total?pr.done/pr.total:0,`${Math.round(pr.total?pr.done/pr.total*100:0)}%`,'big')}<span class="copy"><span class="eyebrow">CONTINUE · ${escape(first.category)}</span><strong>${escape(first.title)}</strong><small>${next?`Next: ${escape(substitute(next.text,runCalcs(parse(r.markdown),r.calc||{}).vars))}`:'All done'}</small>${(()=>{const d=dueInfo(first);return d&&d.tone!=='later'?dueChip(d):'';})()}</span><span class="go" aria-hidden="true">→</span></button>`;
+    if(running.length>1){
+      html+=`<div class="section-label">Also in progress</div><div class="mini-list">`;
+      for(const {c,run:r} of running.slice(1)){const p=progressOf(r);html+=`<button type="button" class="mini-row" data-action="open" data-id="${escape(c.id)}" ${hueStyle(c.category)}>${ring(p.total?p.done/p.total:0)}<span class="copy"><strong>${escape(c.title)}</strong><small>${p.done} of ${p.total} · last touched ${escape(relativeDay(new Date(r.touched||r.started||Date.now())))}</small></span>${(()=>{const d=dueInfo(c);return d&&d.tone!=='later'?dueChip(d):'<span class="chevron">›</span>';})()}</button>`;}
+      html+='</div>';
+    }
+  }
+  const due=dueList(visible().filter(c=>!state.runs[c.id]));
+  if(due.length){
+    html+=`<div class="section-label">Due</div><div class="mini-list">`;
+    for(const {c,info} of due){const last=lastDone(c);html+=`<button type="button" class="mini-row due ${info.tone}" data-action="open" data-id="${escape(c.id)}" ${hueStyle(c.category)}><span class="cat-icon">${categoryIcon(categoryNamed(c.category))}</span><span class="copy"><strong>${escape(c.title)}</strong><small>${escape(describeSchedule(c.schedule))} · ${last?`last done ${escape(relativeDay(last))}`:'never done'}</small></span>${dueChip(info)}</button>`;}
+    html+='</div>';
   }
   html+=`<div class="row between section-head"><h2>Categories</h2>${button('categories','Edit','small quiet','aria-label="Manage categories"')}</div>`;
   if(!state.categories.length)html+=`<div class="card empty"><p>No categories yet.</p>${button('categories','Create a category','primary')}</div>`;
@@ -197,14 +216,20 @@ function renderHeader(){
   const r=run(),p=progressOf(r);
   header.innerHTML=`<div class="run-title-row"><h1>${escape(c.title)}</h1>${search}${button('options','•••','icon-button','aria-label="Checklist options"')}</div><div class="progress" role="progressbar" aria-label="Checklist progress" aria-valuemin="0" aria-valuemax="${p.total||1}" aria-valuenow="${p.done}"><div style="width:${p.total?p.done/p.total*100:0}%"></div></div><div class="run-meta"><span class="stat">${escape(c.category)} · ${flowHTML('run-done',p.done)} of ${p.total} done${p.pending?` · ${p.pending} skipped`:''}</span><div class="mode-toggle" role="group" aria-label="View">${button('mode','☰ List',runMode==='list'?'selected':'',`data-mode="list" aria-pressed="${runMode==='list'}"`)}${button('mode','◎ Focus',runMode==='focus'?'selected':'',`data-mode="focus" aria-pressed="${runMode==='focus'}"`)}</div></div>`;
 }
+function scheduleStrip(c){
+  const last=lastDone(c),info=dueInfo(c);
+  const parts=[c.schedule?`🔁 ${describeSchedule(c.schedule)}`:'🔁 Set a repeat',last?`Last done ${relativeDay(last)}`:'Never done'];
+  return `<button type="button" class="schedule-strip" data-action="schedule" data-id="${escape(c.id)}"><span>${parts.map(escape).join(' · ')}</span>${info?dueChip(info):''}</button>`;
+}
 function runBanners(c,r){
-  if(c.retired)return '<div class="note">This checklist was removed from your GitHub library. Your progress is kept until you close it.</div>';
-  if(r.version!==versionOf(c)&&available(c))return `<div class="note">A newer version of this checklist is saved. You’re still using the version you started with.${button('reset-one','Switch to the new version','outline full')}</div>`;
-  return '';
+  const strip=scheduleStrip(c);
+  if(c.retired)return strip+'<div class="note">This checklist was removed from your GitHub library. Your progress is kept until you close it.</div>';
+  if(r.version!==versionOf(c)&&available(c))return strip+`<div class="note">A newer version of this checklist is saved. You’re still using the version you started with.${button('reset-one','Switch to the new version','outline full')}</div>`;
+  return strip;
 }
 function completionHTML(){
   const next=nextChecklist(state);
-  return `<div class="card completion"><div class="burst" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></div><h2>All done.</h2><p class="help">Every item in “${escape(active().title)}” is checked.</p>${next?button('open',`Next: ${escape(next.title)} →`,'primary full',`data-id="${escape(next.id)}"`):''}${button('finish','Finish & clear progress','outline full')}${button('home','Back home','quiet full')}</div>`;
+  return `<div class="card completion"><div class="burst" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></div><h2>All done.</h2><p class="help">Every item in “${escape(active().title)}” is checked. Logged as done ${escape(relativeDay(lastDone(active())??new Date()))}.${nextDue(active())?` Next due ${escape(relativeDay(nextDue(active())))}.`:''}</p>${next?button('open',`Next: ${escape(next.title)} →`,'primary full',`data-id="${escape(next.id)}"`):''}${button('finish','Finish & clear progress','outline full')}${button('home','Back home','quiet full')}</div>`;
 }
 function runner(){
   const c=active(),r=run(),t=tasks(r),blocks=parse(r.markdown).filter(b=>!(b.kind==='heading'&&b.level===1&&b.text.trim()===c.title)),calc=runCalcs(blocks,r.calc||{});
@@ -233,7 +258,7 @@ function focusHTML(blocks,r,calc){
 function setTask(line,action,{advance=true}={}){
   const was=complete(run());
   // Checking an item off also stops its timer.
-  if(!change(s=>{const r=s.runs[s.active];setItem(r,line,action);if(r.states[line]==='done'&&r.timers)delete r.timers[line];}))return;
+  if(!change(s=>{const r=s.runs[s.active];setItem(r,line,action);if(r.states[line]==='done'&&r.timers)delete r.timers[line];syncCompletion(s,s.active);}))return;
   const nowDone=run().states[line]==='done';
   if(action==='done'&&nowDone){haptic(10);document.getElementById(`line-${line}`)?.classList.add('just-checked');}
   if(complete(run())&&!was){celebrate();return;}
@@ -413,9 +438,30 @@ function optionsSheet(){
   let html=`<h2 class="sheet-title">${escape(c.title)}</h2><div class="sheet-list">`;
   if(c.source==='device')html+=button('edit','✎ Edit checklist')+button('history','🕘 Revision history');
   else html+=`<div class="row between sheet-row"><span>Save offline</span>${offlineToggle(c)}</div>`+button('copy','⧉ Make an editable copy');
+  html+=button('schedule',`🔁 Repeat & due date${c.schedule?` · ${escape(describeSchedule(c.schedule))}`:''}`,'',`data-id="${escape(c.id)}"`);
   html+=button('export','⇩ Export Markdown')+button('reset-one','↺ Restart checklist')+button('close-run','✕ Close checklist (clear progress)');
   if(c.source==='device')html+=button('delete','🗑 Delete checklist…','danger-text');
   openSheet(html+'</div>',{label:'Checklist options'});
+}
+const UNIT_LABEL={day:'days',week:'weeks',month:'months',year:'years'};
+const sameSchedule=(a,b)=>(!a&&!b)||(!!a&&!!b&&a.every===b.every&&a.unit===b.unit);
+function scheduleSheet(id){
+  const c=state.checklists.find(c=>c.id===id);if(!c)return;
+  const sch=c.schedule,hist=(c.completions||[]).slice(-6).reverse(),due=nextDue(c),dueValue=due?dayKey(due):'';
+  const presets=[['Never',null],['Daily',{every:1,unit:'day'}],['Weekly',{every:1,unit:'week'}],['Monthly',{every:1,unit:'month'}],['Yearly',{every:1,unit:'year'}]];
+  let html=`<h2 class="sheet-title">Repeat &amp; due date</h2><p class="subtitle">${escape(c.title)}</p>`;
+  html+=`<div class="preset-row" role="group" aria-label="How often">${presets.map(([label,v])=>button('sched-preset',label,sameSchedule(v,sch)?'selected':'',`data-keep data-every="${v?.every??''}" data-unit="${v?.unit??''}" aria-pressed="${sameSchedule(v,sch)}"`)).join('')}</div>`;
+  html+=`<input type="hidden" id="sched-on" value="${sch?1:0}"><div id="sched-fields" class="sched-fields ${sch?'':'off'}"><label for="sched-every">Repeat every</label><div class="row"><input id="sched-every" type="number" min="1" max="365" inputmode="numeric" value="${sch?.every??1}"><select id="sched-unit" aria-label="Unit">${UNITS.map(u=>`<option value="${u}" ${u===(sch?.unit??'month')?'selected':''}>${UNIT_LABEL[u]}</option>`).join('')}</select></div></div>`;
+  html+=`<label for="sched-due">Next due</label><input id="sched-due" type="date" value="${dueValue}" data-initial="${dueValue}"><p class="help">${sch?'Counted from the last time you finished it. Pick a date to override just the next one.':'Optional: a one-time due date.'}</p>`;
+  html+=`<div class="sheet-actions">${button('sched-save','Save','primary full',`data-keep data-id="${escape(id)}"`)}${button('sched-log','✓ Log as done today','outline full',`data-keep data-id="${escape(id)}"`)}</div>`;
+  html+=`<div class="history"><h3>History</h3>${hist.length?`<p class="help">Done ${c.completions.length} time${c.completions.length===1?'':'s'}.</p><ul>${hist.map(d=>`<li><span>${escape(new Date(d).toLocaleDateString([], {weekday:'short',month:'short',day:'numeric',year:'numeric'}))}</span><small>${escape(relativeDay(new Date(d)))}</small></li>`).join('')}</ul>`:'<p class="help">Not completed yet. Checking off every item logs it here.</p>'}</div>`;
+  openSheet(html,{label:'Repeat and due date'});
+}
+function setScheduleFields(on){
+  $('#sched-on').value=on?'1':'0';$('#sched-fields')?.classList.toggle('off',!on);
+}
+function updateBadge(){
+  try{const n=dueList(visible(),new Date(),{within:0}).filter(x=>x.info.due).length;(n?navigator.setAppBadge?.(n):navigator.clearAppBadge?.())?.catch?.(()=>{});}catch{}
 }
 function newCategorySheet(){
   openSheet(`<h2 class="sheet-title">New category</h2><div class="row"><input id="sheet-category-icon" class="icon-input" maxlength="4" placeholder="🙂" aria-label="Icon (emoji)"><input id="sheet-category-name" placeholder="e.g. Camping" autocomplete="off" autofocus></div><div class="sheet-actions">${button('sheet-add-category','Add category','primary full')}</div>`,{label:'New category'});
@@ -430,7 +476,8 @@ function commandItems(){
   }
   for(const c of sortChecklists(visible())){
     const r=state.runs[c.id],p=r&&progressOf(r);
-    items.push({group:'Checklists',label:c.title,hint:`${c.category}${p?` · ${p.done}/${p.total}`:''}`,icon:categoryNamed(c.category)?.icon||'☑',keywords:c.category,run:()=>open(c.id)});
+    const due=dueInfo(c);
+    items.push({group:'Checklists',label:c.title,hint:`${c.category}${p?` · ${p.done}/${p.total}`:due&&due.tone!=='later'?` · ${due.label}`:''}`,icon:categoryNamed(c.category)?.icon||'☑',keywords:c.category,run:()=>open(c.id)});
   }
   for(const cat of state.categories)items.push({group:'Categories',label:cat.name,icon:cat.icon||'☷',hint:`${checklistsIn(cat.name).length} checklists`,run:()=>{categoryId=cat.id;go('category');}});
   const actions=[
@@ -453,7 +500,7 @@ function setMode(mode){
   if(mode===runMode)return;
   runMode=mode;try{localStorage.setItem(MODE_KEY,mode);}catch{}
   const update=()=>{render();restorePosition();};
-  if(document.startViewTransition&&!reduced())document.startViewTransition(update);else update();
+  viewTransition(update);
 }
 function restartActive(){
   const c=active();if(!available(c)){notice('The latest version isn’t on this device. Connect to the internet first.');return;}
@@ -509,7 +556,7 @@ document.addEventListener('click',e=>{
   const link=e.target.closest('a[data-web-link]');if(link){if(!navigator.onLine){e.preventDefault();notice('This link needs internet.');}else savePosition();return;}
   const b=e.target.closest('[data-action]');if(!b||b.disabled||!state)return;
   // Buttons inside a sheet close it first (input values stay readable while it animates out).
-  if(b.closest('.sheet')&&b.dataset.action!=='sheet-add-category')closeSheet();
+  if(b.closest('.sheet')&&!b.hasAttribute('data-keep')&&b.dataset.action!=='sheet-add-category')closeSheet();
   handle(b.dataset.action,b);
 });
 function handle(action,b){
@@ -524,6 +571,28 @@ function handle(action,b){
     case 'close-sheet':return;
     case 'new':return startEditing({categoryName:b.dataset.category??(page==='category'?category()?.name:null)});
     case 'options':return optionsSheet();
+    case 'schedule':return scheduleSheet(id);
+    case 'sched-preset':{
+      const on=!!b.dataset.unit;setScheduleFields(on);
+      if(on){$('#sched-every').value=b.dataset.every;$('#sched-unit').value=b.dataset.unit;}
+      b.parentElement.querySelectorAll('button').forEach(x=>{x.classList.toggle('selected',x===b);x.setAttribute('aria-pressed',String(x===b));});
+      return;
+    }
+    case 'sched-save':{
+      const c=state.checklists.find(c=>c.id===id);if(!c)return;
+      const on=$('#sched-on').value==='1',schedule=on?{every:Number($('#sched-every').value),unit:$('#sched-unit').value}:null;
+      const due=$('#sched-due'),key=due.value!==due.dataset.initial?(due.value||undefined):c.nextDue;
+      if(change(s=>setSchedule(s.checklists.find(x=>x.id===id),schedule,key))){
+        closeSheet();const info=dueInfo(state.checklists.find(x=>x.id===id));
+        toast(`${describeSchedule(schedule)}${info?` · ${info.label.toLowerCase()}`:''}.`,{type:'success',icon:'🔁'});
+      }
+      return;
+    }
+    case 'sched-log':{
+      const title=state.checklists.find(c=>c.id===id)?.title;
+      if(undoable(`Logged “${title}” as done today.`,s=>recordCompletion(s.checklists.find(x=>x.id===id))))closeSheet();
+      return;
+    }
     case 'mode':return setMode(b.dataset.mode);
     case 'cancel':editingCategory=null;render();return;
     case 'check':case 'pending':return setTask(Number(b.dataset.line),action==='check'?'done':'pending');
@@ -643,6 +712,7 @@ document.addEventListener('change',e=>{
   if(t.dataset.rowCallout!==undefined){const i=Number(t.dataset.rowCallout);change(s=>{s.draft.rows[i].callout=t.value;},false);return;}
   if(t.id==='theme-choice'){try{window.cheklstTheme.set(t.value);}catch{notice('Appearance could not be saved.');}}
   if(t.id==='ambient-choice')setAmbientEnabled(t.checked);
+  if(t.id==='sched-every'||t.id==='sched-unit'){setScheduleFields(true);document.querySelectorAll('[data-action="sched-preset"]').forEach(x=>{const match=x.dataset.unit===$('#sched-unit').value&&x.dataset.every===$('#sched-every').value;x.classList.toggle('selected',match);x.setAttribute('aria-pressed',String(match));});}
 });
 main.addEventListener('keydown',e=>{
   // Enter in an item adds the next item, like a notes app.

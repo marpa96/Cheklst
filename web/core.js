@@ -1,5 +1,6 @@
 // Cheklst core: Markdown parsing, runs, device checklists, categories and state validation.
 // Derived from FliteChek's core with aviation-specific concepts (variants, emergency) removed.
+import {recordCompletion,removeCompletion,validSchedule} from './schedule.js';
 export const uid = () => globalThis.crypto.randomUUID();
 export const UNCATEGORIZED = 'Uncategorized';
 
@@ -68,8 +69,9 @@ export function openChecklist(state,id,markdown) {
   const c=state.checklists.find(c=>c.id===id); if(!c) return false;
   if(!state.runs[id]){
     if(typeof markdown!=='string')return false;
-    state.runs[id]={version:versionOf(c),markdown,states:{},position:null,calc:{}};
+    state.runs[id]={version:versionOf(c),markdown,states:{},position:null,calc:{},started:new Date().toISOString()};
   }
+  state.runs[id].touched=new Date().toISOString();
   state.active=id;
   return true;
 }
@@ -81,6 +83,29 @@ export function setItem(run,line,action) {
   if(!tasks(run).some(t=>t.line===line)) return;
   if(run.states[line]===action) delete run.states[line]; else run.states[line]=action;
   run.position=current(run);
+  run.touched=new Date().toISOString();
+}
+// Keep the checklist's completion history in step with its run: finishing logs a completion
+// once; unchecking an item afterwards takes that completion back.
+export function syncCompletion(state,id,now=new Date()){
+  const run=state.runs[id],c=state.checklists.find(c=>c.id===id);if(!run||!c)return false;
+  if(complete(run)&&!run.completedAt){
+    run.completedAt=new Date(now).toISOString();
+    if(c.nextDue)run.prevNextDue=c.nextDue;
+    recordCompletion(c,run.completedAt);
+    return true;
+  }
+  if(!complete(run)&&run.completedAt){
+    removeCompletion(c,run.completedAt);
+    if(run.prevNextDue)c.nextDue=run.prevNextDue;
+    delete run.completedAt;delete run.prevNextDue;
+  }
+  return false;
+}
+// In-progress checklists, most recently used first.
+export function inProgress(state){
+  return Object.entries(state.runs).map(([id,run])=>({c:state.checklists.find(c=>c.id===id),run})).filter(x=>x.c)
+    .sort((a,b)=>(b.run.touched||'').localeCompare(a.run.touched||''));
 }
 export function restart(state,id,markdown) {
   delete state.runs[id];
@@ -189,6 +214,9 @@ export function validateState(s) {
   for(const c of s.checklists) {
     if(!safeID(c.id) || ids.has(c.id) || typeof c.title!=='string' || typeof c.category!=='string' || !['device','library'].includes(c.source)) throw new Error('Invalid checklist data.');
     ids.add(c.id);
+    if(!validSchedule(c.schedule))throw new Error('Invalid repeat schedule.');
+    if(c.nextDue!==undefined&&!/^\d{4}-\d{2}-\d{2}$/.test(c.nextDue))throw new Error('Invalid due date.');
+    if(c.completions!==undefined&&(!Array.isArray(c.completions)||c.completions.some(d=>typeof d!=='string'||!Number.isFinite(Date.parse(d)))))throw new Error('Invalid completion history.');
     if(c.source==='device'){
       if(!Array.isArray(c.revisions)||!c.revisions.length)throw new Error('Invalid checklist revisions.');
       for(const r of c.revisions) if(typeof r.id!=='string' || typeof r.markdown!=='string' || !Number.isFinite(Date.parse(r.date))) throw new Error('Invalid revision data.');

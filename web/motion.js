@@ -11,14 +11,24 @@ export function pageTransition(from,to,update){
   root.dataset.nav=direction;
   // New page content also rises in, slightly staggered.
   const enter=()=>{update();main.classList.remove('entering');void main.offsetWidth;main.classList.add('entering');clearTimeout(enterTimer);enterTimer=setTimeout(()=>main.classList.remove('entering'),800);};
-  if(document.startViewTransition){
-    const t=document.startViewTransition(enter);
-    t.finished.finally(()=>{if(root.dataset.nav===direction)delete root.dataset.nav;});
-    return;
-  }
-  enter();setTimeout(()=>{if(root.dataset.nav===direction)delete root.dataset.nav;},800);
+  viewTransition(enter).finally(()=>{if(root.dataset.nav===direction)delete root.dataset.nav;});
 }
 let enterTimer;
+
+// Run `update` inside a view transition when possible. The update always runs exactly once:
+// browsers abort transitions (hidden tab, overlapping transition) and may then skip the callback.
+export function viewTransition(update){
+  let ran=false;const once=()=>{if(!ran){ran=true;update();}};
+  if(!document.startViewTransition||document.hidden||reduced()){once();return Promise.resolve();}
+  try{
+    const t=document.startViewTransition(once);
+    t.ready.catch(()=>{});
+    t.updateCallbackDone.catch(()=>{}).finally(once);
+    // A transition waits for the next frame; if none comes (page not painting), don't hang.
+    setTimeout(()=>{if(!ran){try{t.skipTransition();}catch{}once();}},500);
+    return t.finished.catch(()=>{});
+  }catch{once();return Promise.resolve();}
+}
 
 // ---------- rolling numbers (in the spirit of NumberFlow) ----------
 // Mark up a value with flowHTML(key, text); after each render, animateFlows() rolls each digit
